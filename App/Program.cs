@@ -4,60 +4,35 @@ using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Security;
 using Shouldly;
 
-static string Process(bool encrypt, string keyString, string input)
+// See: https://stackoverflow.com/a/75841861/1834787
+
+static byte[] Process(bool encrypt, string keyMaterial, byte[] input)
 {
-    // We undo replacing of the 2 characters from Base64 which where not URL safe 
-    if (!encrypt)
-    {
-        input = input.Replace("-", "+").Replace("_", "/");
-    }
+    // Keyderivation via SHA256
+    var keyMaterialBytes = Encoding.UTF8.GetBytes(keyMaterial);
+    var digest = new Sha256Digest();
+    digest.BlockUpdate(keyMaterialBytes, 0, keyMaterialBytes.Length);
+    var keyBytes = new byte[digest.GetDigestSize()];
+    digest.DoFinal(keyBytes, 0);
 
-    // Get UTF8 byte array of input string for encryption
-    var inputBytes = Encoding.UTF8.GetBytes(input);
-
-    // Again, get UTF8 byte array of key for use in encryption
-    var keyBytes = Encoding.UTF8.GetBytes(keyString);
-
-    // Padding the key to 256
-    var myHash = new Sha256Digest();
-    myHash.BlockUpdate(keyBytes, 0, keyBytes.Length);
-    var keyBytesPadded = new byte[myHash.GetDigestSize()];
-    myHash.DoFinal(keyBytesPadded, 0);
-
-    // Initialize AES CTR (counter) mode cipher from the BouncyCastle cryptography library
+    // Encryption/Decryption with AES-CTR using a static IV
     var cipher = CipherUtilities.GetCipher("AES/CTR/NoPadding");
-
-    cipher.Init(true, new ParametersWithIV(ParameterUtilities.CreateKeyParameter("AES", keyBytesPadded), new byte[16]));
-
-    // As this is a stream cipher, you can process bytes chunk by chunk until complete, then close with DoFinal.
-    // In our case we don't need a stream, so we simply call DoFinal() to encrypt the entire input at once.
-    var encryptedBytes = cipher.DoFinal(inputBytes);
-
-    // The encryption is complete, however we still need to get the encrypted byte array into a useful form for passing as a URL parameter
-    // First, we convert the encrypted byte array to a Base64 string to make it use ASCII characters
-    var base64EncryptedOutputString = Convert.ToBase64String(encryptedBytes);
-
-    // Lastly, we replace the 2 characters from Base64 which are not URL safe ( + and / ) with ( - and _ ) as recommended in IETF RFC4648
-    var urlEncodedBase64EncryptedOutputString = base64EncryptedOutputString;
-
-    if (encrypt)
-    {
-        urlEncodedBase64EncryptedOutputString =
-            urlEncodedBase64EncryptedOutputString.Replace("+", "-").Replace("/", "_");
-    }
-
-    // This final string is now safe to be passed around, into our web service by URL, etc.
-    return urlEncodedBase64EncryptedOutputString;
+    cipher.Init(encrypt, new ParametersWithIV(ParameterUtilities.CreateKeyParameter("AES", keyBytes), new byte[16]));
+    return cipher.DoFinal(input);
 }
 
-static string Encrypt(string keyString, string input)
+static string Encrypt(string keyMaterial, string plaintext)
 {
-    return Process(true, keyString, input);
+    var plaintextBytes = Encoding.UTF8.GetBytes(plaintext); // UTF-8 encode
+    var ciphertextBytes = Process(true, keyMaterial, plaintextBytes);
+    return Convert.ToBase64String(ciphertextBytes).Replace("+", "-").Replace("/", "_"); // Base64url encode
 }
 
-static string Decrypt(string keyString, string input)
+static string Decrypt(string keyMaterial, string ciphertext)
 {
-    return Process(false, keyString, input);
+    var ciphertextBytes = Convert.FromBase64String(ciphertext.Replace("-", "+").Replace("_", "/")); // Base64url decode
+    var decryptedBytes = Process(false, keyMaterial, ciphertextBytes);
+    return Encoding.UTF8.GetString(decryptedBytes); // UTF-8 decode
 }
 
 const string key = "supersecret";
